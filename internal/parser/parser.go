@@ -4,6 +4,7 @@ package parser
 import (
 	"errors"
 	"flag"
+	"fmt"
 	"os"
 	"regexp"
 	"strings"
@@ -11,12 +12,59 @@ import (
 	"github.com/UnendingLoop/DistributedGrepClone/internal/model"
 )
 
-var (
-	SP          model.SearchParam
-	ctxPriority = map[string]int{}
-)
+var ctxPriority = map[string]int{}
 
-func InitSearchParam() error {
+func InitAppMode() (*model.AppInit, error) {
+	var appInit model.AppInit
+	flagParser := flag.NewFlagSet("DistributedGrepClone", flag.ExitOnError)
+	mode := flagParser.String("mode", "", "specify mode of the app: 'master' or 'slave'")
+
+	// парсим аргументы
+	if err := flagParser.Parse(os.Args[1:]); err != nil {
+		return nil, err
+	}
+
+	appInit.Mode = model.AppMode(*mode)
+
+	// проверяем режим
+	switch appInit.Mode {
+	case model.ModeMaster:
+		if err := initMasterParam(&appInit); err != nil {
+			return nil, err
+		}
+		if len(*appInit.Slaves) == 0 {
+			return nil, errors.New("at least one --node must be provided running in 'slave'-mode")
+		}
+	case model.ModeSlave:
+		if err := initSlaveParam(&appInit); err != nil {
+			return nil, err
+		}
+	default:
+	}
+
+	return &appInit, nil
+}
+
+func initSlaveParam(ai *model.AppInit) error {
+	flagParser := flag.NewFlagSet("DistributedGrepClone", flag.ExitOnError)
+	addr := flagParser.String("address", "", fmt.Sprintf("specify slave-node address (NB: %q is already use by master-node)", model.DefaultMasterAddress))
+
+	if err := flagParser.Parse(os.Args[1:]); err != nil {
+		return err
+	}
+
+	switch *addr {
+	case "":
+		return errors.New("empty slave-node address")
+	case model.DefaultMasterAddress:
+		return errors.New("specified slave-node address not available")
+	default:
+		ai.Address = *addr
+		return nil
+	}
+}
+
+func initMasterParam(ai *model.AppInit) error {
 	preprocessArgs()
 
 	flagParser := flag.NewFlagSet("grepClone", flag.ExitOnError)
@@ -30,11 +78,14 @@ func InitSearchParam() error {
 	g := flagParser.Bool("F", false, "specified pattern will be used strictly as a string, not regexp")
 	h := flagParser.Bool("n", false, "enumerates output lines according to their order in input")
 
+	q := flagParser.Int("quorum", 0, "set slave-nodes N for quorum")
+	flagParser.Var(ai.Slaves, "node", "set slave-node address")
+
 	if err := flagParser.Parse(os.Args[1:]); err != nil {
 		return err
 	}
 
-	SP = model.SearchParam{
+	ai.SearchParam = model.GrepParam{
 		CtxAfter:     *a,
 		CtxBefore:    *b,
 		CtxCircle:    *c,
@@ -44,39 +95,44 @@ func InitSearchParam() error {
 		ExactMatch:   *g,
 		EnumLine:     *h,
 	}
+	ai.Address = model.DefaultMasterAddress
+	ai.Quorum = *q
+	if ai.Quorum <= 0 {
+		return errors.New("incorrect quorum N provided")
+	}
 
 	// Выравниваем значения контекста A и B по значению C
-	setABCvaluesByPriority()
+	setABCvaluesByPriority(&ai.SearchParam)
 
 	// Приводим паттерн к нижнему регистру если стоят флаги 'F' и 'i'
-	if SP.IgnoreCase && SP.ExactMatch {
-		SP.Pattern = strings.ToLower(SP.Pattern)
+	if ai.SearchParam.IgnoreCase && ai.SearchParam.ExactMatch {
+		ai.SearchParam.Pattern = strings.ToLower(ai.SearchParam.Pattern)
 	}
 
 	// Разбираемся с паттерном и входом
 	switch len(flagParser.Args()) {
 	case 0:
-		return errors.New("pattern not specified!\nUsage: grepClone [flags] pattern [file...]")
+		return errors.New("pattern not specified!\nUsage: DistributedGrepClone [flags] pattern [file...]")
 	case 1:
-		SP.Pattern = flagParser.Args()[0]
+		ai.SearchParam.Pattern = flagParser.Args()[0]
 	default:
-		SP.Pattern = flagParser.Args()[0]
-		SP.Source = flagParser.Args()[1:]
+		ai.SearchParam.Pattern = flagParser.Args()[0]
+		ai.SearchParam.Source = flagParser.Args()[1:]
 	}
 
 	// ставим флаг чтобы печатать имя файла перед каждой строкой/суммой строк, если файлов несколько
-	if len(SP.Source) > 1 {
-		SP.PrintFileName = true
+	if len(ai.SearchParam.Source) > 1 {
+		ai.SearchParam.PrintFileName = true
 	}
 
 	// сразу првоеряем корректность регулярки, если флаг F неактивен
-	if !SP.ExactMatch {
+	if !ai.SearchParam.ExactMatch {
 		var err error
-		pattern := SP.Pattern
-		if SP.IgnoreCase {
+		pattern := ai.SearchParam.Pattern
+		if ai.SearchParam.IgnoreCase {
 			pattern = "(?i)" + pattern
 		}
-		SP.RegexpPattern, err = regexp.Compile(pattern)
+		ai.SearchParam.RegexpPattern, err = regexp.Compile(pattern)
 		if err != nil {
 			return err
 		}
@@ -102,7 +158,7 @@ func preprocessArgs() {
 	}
 }
 
-func setABCvaluesByPriority() {
+func setABCvaluesByPriority(SP *model.GrepParam) {
 	a := ctxPriority["A"]
 	b := ctxPriority["B"]
 	c, ok := ctxPriority["C"]
