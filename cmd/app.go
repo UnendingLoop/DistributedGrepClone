@@ -1,8 +1,13 @@
-package cmd
+package main
 
 import (
+	"context"
 	"log"
+	"os"
+	"os/signal"
+	"syscall"
 
+	"github.com/UnendingLoop/DistributedGrepClone/internal/appmode"
 	"github.com/UnendingLoop/DistributedGrepClone/internal/model"
 	"github.com/UnendingLoop/DistributedGrepClone/internal/parser"
 )
@@ -15,11 +20,18 @@ func main() {
 		return
 	}
 
+	// готовим слушатель прерываний - контекст для всего приложения
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	// запуск приложения в указанном режиме
 	switch appParam.Mode {
-	case model.ModeMaster: // вызов мастера
-	case model.ModeSlave: // вызов слейва
+	case model.ModeMaster:
+		appmode.RunMaster(ctx, stop, appParam)
+	case model.ModeSlave:
+		appmode.RunSlave(ctx, stop, appParam)
 	default:
-		log.Printf("Failed to launch the app: unknown mode %q specified.\nExiting the app...", appParam.Mode)
+		log.Printf("Failed to launch: unknown mode %q specified.\nExiting the app...", appParam.Mode)
 		return
 	}
 }

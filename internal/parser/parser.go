@@ -53,11 +53,11 @@ func initSlaveParam(ai *model.AppInit) error {
 		return err
 	}
 
-	switch *addr {
-	case "":
+	switch {
+	case *addr == "":
 		return errors.New("empty slave-node address")
-	case model.DefaultMasterAddress:
-		return errors.New("specified slave-node address not available")
+	case strings.Contains(*addr, model.DefaultMasterAddress):
+		return fmt.Errorf("specified slave-node address %q not available", *addr)
 	default:
 		ai.Address = *addr
 		return nil
@@ -96,9 +96,21 @@ func initMasterParam(ai *model.AppInit) error {
 		EnumLine:     *h,
 	}
 	ai.Address = model.DefaultMasterAddress
-	ai.Quorum = *q
-	if ai.Quorum <= 0 {
-		return errors.New("incorrect quorum N provided")
+
+	if ai.Slaves == nil {
+		return errors.New("no slave-nodes specified")
+	}
+
+	if q != nil {
+		ai.Quorum = *q
+		if ai.Quorum <= 0 {
+			return errors.New("incorrect quorum N provided")
+		}
+		if len(*ai.Slaves) > ai.Quorum {
+			return errors.New("slave-nodes N cannot be less than --quorum value")
+		}
+	} else {
+		ai.Quorum = (len(*ai.Slaves) / 2) + 1
 	}
 
 	// Выравниваем значения контекста A и B по значению C
@@ -128,13 +140,12 @@ func initMasterParam(ai *model.AppInit) error {
 	// сразу првоеряем корректность регулярки, если флаг F неактивен
 	if !ai.SearchParam.ExactMatch {
 		var err error
-		pattern := ai.SearchParam.Pattern
 		if ai.SearchParam.IgnoreCase {
-			pattern = "(?i)" + pattern
+			ai.SearchParam.Pattern = "(?i)" + ai.SearchParam.Pattern
 		}
-		ai.SearchParam.RegexpPattern, err = regexp.Compile(pattern)
+		_, err = regexp.Compile(ai.SearchParam.Pattern)
 		if err != nil {
-			return err
+			return fmt.Errorf("incorrect regexp provided: %q", err.Error())
 		}
 	}
 	return nil

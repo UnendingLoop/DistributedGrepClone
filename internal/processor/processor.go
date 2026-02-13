@@ -2,81 +2,64 @@
 package processor
 
 import (
-	"bufio"
+	"context"
 	"fmt"
-	"grepClone/internal/matcher"
-	"grepClone/internal/output"
-	"grepClone/internal/parser"
-	"os"
+	"regexp"
+	"strings"
+
+	"github.com/UnendingLoop/DistributedGrepClone/internal/model"
+	"github.com/cespare/xxhash/v2"
 )
 
-func ProcessInput(fileName string) error {
-	var scanner *bufio.Scanner
-	var file *os.File
+func ProcessInput(ctx context.Context, task *model.SlaveTask) *model.SlaveResult {
+	result := model.SlaveResult{
+		TaskID: task.TaskID,
+	}
 
-	// инициализация источника строк
-	switch fileName {
-	case "":
-		scanner = bufio.NewScanner(os.Stdin)
+	// считаем метчи или выводим метчи
+	switch task.GP.CountFound {
+	case true:
+		result.Output = countMatchingLines(task.Input, task.FileName, &task.GP)
 	default:
-		// проверяем открывается ли файл, и не папка ли это
-		info, err := os.Stat(fileName)
-		if err != nil { // если ошибка при открытии - проброс ошибки выше
-			return fmt.Errorf("error opening file %q: %q", fileName, err)
-		}
-		if info.IsDir() { // если это папка - проброс ошибки выше
-			return fmt.Errorf("specified source filename %q is a directory", fileName)
-		}
-
-		// открываем файл для чтения
-		file, err = os.Open(fileName)
-		if err != nil {
-			return fmt.Errorf("couldn't open file %q: %q", fileName, err)
-		}
-		defer file.Close()
-		scanner = bufio.NewScanner(file)
+		result.Output = getMatchingLines(task.Input, task.FileName, &task.GP)
 	}
 
-	// обработка при активном флаге "-с"
-	if parser.SP.CountFound {
-		countLinesToOutput(scanner, fileName)
-		return nil
-	}
+	// считаем общий хеш
+	result.HashSumm = hasher(result.Output)
 
-	// стандартная обработка + поддержка контекста + реверс результата
-	return stdProcessWithCtx(scanner, fileName)
+	return &result
 }
 
-func countLinesToOutput(scanner *bufio.Scanner, fileName string) {
+func countMatchingLines(input []string, fileName string, gp *model.GrepParam) []string {
+	res := ""
 	counter := 0
-	for scanner.Scan() {
-		if matcher.FindMatch(scanner.Text()) {
+	for _, v := range input {
+		if findMatch(gp, v) {
 			counter++
 		}
 	}
 
 	switch {
-	case parser.SP.PrintFileName:
-		fmt.Printf("%s: %d\n", fileName, counter)
+	case gp.PrintFileName:
+		res = fmt.Sprintf("%s: %d\n", fileName, counter)
 	default:
-		fmt.Println(counter)
+		res = fmt.Sprintln(counter)
 	}
+	return []string{res}
 }
 
-func stdProcessWithCtx(source *bufio.Scanner, fileName string) error {
-	line := ""
+func getMatchingLines(input []string, fileName string, gp *model.GrepParam) []string {
 	lineN := 1
-	beforeBuf := make([]string, 0, parser.SP.CtxBefore)
+	beforeBuf := make([]string, 0, gp.CtxBefore)
 	isCtxZone := false
 	lastPrintedN := 0
 	isMatch := false
 	isPrinted := make(map[int]struct{})
 	afterCount := 0
 
-	for source.Scan() {
-		line = source.Text()
-		isMatch = matcher.FindMatch(line)
-		if parser.SP.InvertResult { //-v
+	for _, line := range input {
+		isMatch = findMatch(gp, line)
+		if gp.InvertResult { //-v
 			isMatch = !isMatch
 		}
 
@@ -85,11 +68,11 @@ func stdProcessWithCtx(source *bufio.Scanner, fileName string) error {
 				// разбираемся с BEFORE и вставляем разделитель если надо
 				j := lineN - len(beforeBuf)
 				if j-lastPrintedN > 1 && lastPrintedN != 0 {
-					output.PrintLine("--", "", 0)
+					printLine(gp, "--", "", 0)
 				}
 				for i := range beforeBuf {
 					if _, ok := isPrinted[j]; !ok {
-						output.PrintLine(beforeBuf[i], fileName, j)
+						printLine(gp, beforeBuf[i], fileName, j)
 						isPrinted[j] = struct{}{}
 						lastPrintedN = j
 					}
@@ -99,13 +82,13 @@ func stdProcessWithCtx(source *bufio.Scanner, fileName string) error {
 
 			// обработка самой isMatch-строки
 			if _, ok := isPrinted[lineN]; !ok {
-				output.PrintLine(line, fileName, lineN)
+				printLine(gp, line, fileName, lineN)
 				lastPrintedN = lineN
 				isPrinted[lineN] = struct{}{}
-				if parser.SP.CtxAfter > 0 {
+				if gp.CtxAfter > 0 {
 					isCtxZone = true
 				}
-				afterCount = parser.SP.CtxAfter
+				afterCount = gp.CtxAfter
 			}
 			lineN++
 			continue
@@ -114,7 +97,7 @@ func stdProcessWithCtx(source *bufio.Scanner, fileName string) error {
 		// разбираемся с AFTER
 		if afterCount > 0 {
 			if _, ok := isPrinted[lineN]; !ok {
-				output.PrintLine(line, fileName, lineN)
+				printLine(gp, line, fileName, lineN)
 				lastPrintedN = lineN
 				isPrinted[lineN] = struct{}{}
 			}
@@ -125,8 +108,8 @@ func stdProcessWithCtx(source *bufio.Scanner, fileName string) error {
 		}
 
 		// актуализируем beforeBuf
-		if parser.SP.CtxBefore > 0 {
-			if len(beforeBuf) == parser.SP.CtxBefore {
+		if gp.CtxBefore > 0 {
+			if len(beforeBuf) == gp.CtxBefore {
 				beforeBuf = beforeBuf[1:] // pop front
 			}
 			beforeBuf = append(beforeBuf, line)
@@ -135,5 +118,43 @@ func stdProcessWithCtx(source *bufio.Scanner, fileName string) error {
 		lineN++
 	}
 
-	return source.Err()
+	return nil
+}
+
+// учесть что нужно делать префикс имени файла если файлов >1  + нумерация строк
+func printLine(SP *model.GrepParam, line, fileName string, n int) {
+	switch {
+	case fileName == "":
+		fmt.Println(line)
+	case SP.PrintFileName && SP.EnumLine:
+		fmt.Printf("%s: %d: %s\n", fileName, n, line)
+	case SP.EnumLine:
+		fmt.Printf("%d: %s\n", n, line)
+	case SP.PrintFileName:
+		fmt.Printf("%s: %s\n", fileName, line)
+	default:
+		fmt.Println(line)
+	}
+}
+
+func findMatch(SP *model.GrepParam, line string) bool {
+	if SP.IgnoreCase { //-i
+		line = strings.ToLower(line)
+	}
+
+	switch {
+	case SP.ExactMatch: //-F
+		return strings.Contains(line, SP.Pattern)
+	default:
+		pattern, _ := regexp.Compile(SP.Pattern)
+		return pattern.MatchString(line)
+	}
+}
+
+func hasher(input []string) uint64 {
+	hs := xxhash.New()
+	for _, s := range input {
+		_, _ = hs.WriteString(s)
+	}
+	return hs.Sum64()
 }
