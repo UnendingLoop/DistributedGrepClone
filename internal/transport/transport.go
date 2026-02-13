@@ -1,3 +1,4 @@
+// Package transport provides a new server-entity(by ginext) for slave-mode operability with handlers to serve endpoints
 package transport
 
 import (
@@ -10,7 +11,7 @@ import (
 )
 
 func NewSlaveServer(addr string) *http.Server {
-	engine := ginext.New("debug")
+	engine := ginext.New("release")
 	engine.GET("/ping", HealthCheck)
 	engine.POST("/task", ReceiveTask)
 

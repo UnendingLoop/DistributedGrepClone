@@ -14,9 +14,9 @@ import (
 
 func main() {
 	// инициализировать параметры запуска - режим и прочее:
-	appParam, err := parser.InitAppMode()
+	appParam, err := parser.InitAppMode(os.Args[1:])
 	if err != nil {
-		log.Printf("Failed to initialize the app: %q", err.Error())
+		log.Printf("Failed to launch DistributedGrepClone: %q", err.Error())
 		return
 	}
 

@@ -1,4 +1,4 @@
-// Package parser puts os.Args into SearchParam structure and validates it for any issues
+// Package parser puts os.Args into SearchParam structure and validates it for any business-issues
 package parser
 
 import (
@@ -14,61 +14,10 @@ import (
 
 var ctxPriority = map[string]int{}
 
-func InitAppMode() (*model.AppInit, error) {
+func InitAppMode(osArgs []string) (*model.AppInit, error) {
 	var appInit model.AppInit
 	flagParser := flag.NewFlagSet("DistributedGrepClone", flag.ExitOnError)
 	mode := flagParser.String("mode", "", "specify mode of the app: 'master' or 'slave'")
-
-	// парсим аргументы
-	if err := flagParser.Parse(os.Args[1:]); err != nil {
-		return nil, err
-	}
-
-	appInit.Mode = model.AppMode(*mode)
-
-	// проверяем режим
-	switch appInit.Mode {
-	case model.ModeMaster:
-		if err := initMasterParam(&appInit); err != nil {
-			return nil, err
-		}
-		if len(*appInit.Slaves) == 0 {
-			return nil, errors.New("at least one --node must be provided running in 'slave'-mode")
-		}
-	case model.ModeSlave:
-		if err := initSlaveParam(&appInit); err != nil {
-			return nil, err
-		}
-	default:
-	}
-
-	return &appInit, nil
-}
-
-func initSlaveParam(ai *model.AppInit) error {
-	flagParser := flag.NewFlagSet("DistributedGrepClone", flag.ExitOnError)
-	addr := flagParser.String("address", "", fmt.Sprintf("specify slave-node address (NB: %q is already use by master-node)", model.DefaultMasterAddress))
-
-	if err := flagParser.Parse(os.Args[1:]); err != nil {
-		return err
-	}
-
-	switch {
-	case *addr == "":
-		return errors.New("empty slave-node address")
-	case strings.Contains(*addr, model.DefaultMasterAddress):
-		return fmt.Errorf("specified slave-node address %q not available", *addr)
-	default:
-		ai.Address = *addr
-		return nil
-	}
-}
-
-func initMasterParam(ai *model.AppInit) error {
-	preprocessArgs()
-
-	flagParser := flag.NewFlagSet("grepClone", flag.ExitOnError)
-
 	a := flagParser.Int("A", 0, "show N lines after target line")
 	b := flagParser.Int("B", 0, "show N lines before target line")
 	c := flagParser.Int("C", 0, "show N lines before and after target line(same as '-A N' and '-B N')")
@@ -77,40 +26,63 @@ func initMasterParam(ai *model.AppInit) error {
 	f := flagParser.Bool("v", false, "search only lines that DON'T match the specified pattern")
 	g := flagParser.Bool("F", false, "specified pattern will be used strictly as a string, not regexp")
 	h := flagParser.Bool("n", false, "enumerates output lines according to their order in input")
+	addr := flagParser.String("addr", "", "specify slave-node address")
 
-	q := flagParser.Int("quorum", 0, "set slave-nodes N for quorum")
-	flagParser.Var(ai.Slaves, "node", "set slave-node address")
+	q := flagParser.Int("quorum", -1, "set slave-nodes N for quorum")
+	flagParser.Var(&appInit.Slaves, "node", "set slave-node address")
 
-	if err := flagParser.Parse(os.Args[1:]); err != nil {
-		return err
+	// парсим аргументы
+	if err := flagParser.Parse(osArgs); err != nil {
+		return nil, err
 	}
 
-	ai.SearchParam = model.GrepParam{
-		CtxAfter:     *a,
-		CtxBefore:    *b,
-		CtxCircle:    *c,
-		CountFound:   *d,
-		IgnoreCase:   *e,
-		InvertResult: *f,
-		ExactMatch:   *g,
-		EnumLine:     *h,
-	}
-	ai.Address = model.DefaultMasterAddress
+	appInit.Mode = model.AppMode(*mode)
 
-	if ai.Slaves == nil {
+	// проверяем режим
+	switch appInit.Mode {
+	case model.ModeMaster:
+		appInit.SearchParam = model.GrepParam{
+			CtxAfter:     *a,
+			CtxBefore:    *b,
+			CtxCircle:    *c,
+			CountFound:   *d,
+			IgnoreCase:   *e,
+			InvertResult: *f,
+			ExactMatch:   *g,
+			EnumLine:     *h,
+		}
+		appInit.Quorum = *q
+
+		if err := initMasterParam(&appInit, flagParser.Args()); err != nil {
+			return nil, err
+		}
+		if len(appInit.Slaves) == 0 {
+			return nil, errors.New("at least one --node must be provided running in 'slave'-mode")
+		}
+	case model.ModeSlave:
+		if *addr == "" {
+			return nil, errors.New("empty slave-node address")
+		}
+		appInit.Address = *addr
+	}
+
+	return &appInit, nil
+}
+
+func initMasterParam(ai *model.AppInit, noNameArgs []string) error {
+	preprocessArgs()
+
+	if len(ai.Slaves) == 0 {
 		return errors.New("no slave-nodes specified")
 	}
 
-	if q != nil {
-		ai.Quorum = *q
-		if ai.Quorum <= 0 {
-			return errors.New("incorrect quorum N provided")
-		}
-		if len(*ai.Slaves) > ai.Quorum {
-			return errors.New("slave-nodes N cannot be less than --quorum value")
-		}
-	} else {
-		ai.Quorum = (len(*ai.Slaves) / 2) + 1
+	switch {
+	case ai.Quorum == 0:
+		return errors.New("incorrect quorum N provided")
+	case ai.Quorum < 0: // если ничего не передано - ставим значение по умолчанию: половина числа slave-nodes + 1
+		ai.Quorum = (len(ai.Slaves) / 2) + 1
+	case ai.Quorum <= len(ai.Slaves):
+		return errors.New("slave-nodes N cannot be less than --quorum value")
 	}
 
 	// Выравниваем значения контекста A и B по значению C
@@ -122,14 +94,14 @@ func initMasterParam(ai *model.AppInit) error {
 	}
 
 	// Разбираемся с паттерном и входом
-	switch len(flagParser.Args()) {
+	switch len(noNameArgs) {
 	case 0:
-		return errors.New("pattern not specified!\nUsage: DistributedGrepClone [flags] pattern [file...]")
+		return errors.New("pattern not specified!\nUsage: DistributedGrepClone [flags] pattern [file(s)...]")
 	case 1:
-		ai.SearchParam.Pattern = flagParser.Args()[0]
+		ai.SearchParam.Pattern = noNameArgs[0]
 	default:
-		ai.SearchParam.Pattern = flagParser.Args()[0]
-		ai.SearchParam.Source = flagParser.Args()[1:]
+		ai.SearchParam.Pattern = noNameArgs[0]
+		ai.SearchParam.Source = noNameArgs[1:]
 	}
 
 	// ставим флаг чтобы печатать имя файла перед каждой строкой/суммой строк, если файлов несколько

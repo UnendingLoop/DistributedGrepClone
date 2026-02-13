@@ -1,3 +1,4 @@
+// Package appmode provides 2 methods to work in preliminarily defined mode 'master' and 'slave'
 package appmode
 
 import (
@@ -83,7 +84,7 @@ func RunMaster(ctx context.Context, stop context.CancelFunc, ai *model.AppInit) 
 	}
 
 	// проверить пингом, что хотя бы минимальное кол-во slave-nodes доступны
-	if err := checkSlavesHealth(ctx, *ai.Slaves, ai.Quorum); err != nil {
+	if err := checkSlavesHealth(ctx, ai.Slaves, ai.Quorum); err != nil {
 		log.Printf("Failed to start grepping: %v", err)
 		return
 	}
@@ -91,7 +92,7 @@ func RunMaster(ctx context.Context, stop context.CancelFunc, ai *model.AppInit) 
 	// асинхронно:
 	// - отправить всем зарегистрированным слейвам задания
 	// - получить результаты
-	result, err := processTasks(ctx, *ai.Slaves, tasks, ai.Quorum)
+	result, err := processTasks(ctx, ai.Slaves, tasks, ai.Quorum)
 	if err != nil {
 		log.Printf("Failed to grep: %v", err)
 		return
@@ -111,12 +112,24 @@ func checkSlavesHealth(ctx context.Context, slavesAddr []string, quorumN int) er
 	rCtx, cancel := context.WithTimeout(ctx, 5*time.Second) // 5 секунд на обнаружение всех slave-nodes
 	defer cancel()
 
+	client := &http.Client{}
+
 	for _, v := range slavesAddr {
 		wg.Add(1)
 		go func(addr string) {
 			defer wg.Done()
-			resp, _ := http.NewRequestWithContext(rCtx, "GET", addr+"/task", nil)
-			if resp.Response.StatusCode == http.StatusOK {
+			req, err := http.NewRequestWithContext(rCtx, "GET", addr+"/ping", nil)
+			if err != nil {
+				return
+			}
+
+			resp, err := client.Do(req)
+			if err != nil {
+				return
+			}
+			defer resp.Body.Close()
+
+			if resp.StatusCode == http.StatusOK {
 				goodSlaves.Add(1)
 			}
 		}(v)
@@ -220,7 +233,7 @@ func collectResults(ctx context.Context, ch <-chan *model.SlaveResult, tasks []m
 
 	wg.Wait()
 
-	// проверяем не отменился ли контекст
+	// проверяем не отменился ли контекст по длине результата
 	if len(quorumResults) == len(tasksMap) {
 		return nil, errors.New("failed to finish grepping: context cancelled")
 	}

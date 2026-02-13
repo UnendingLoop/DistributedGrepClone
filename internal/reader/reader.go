@@ -1,3 +1,6 @@
+// Package reader provides means of reading input specified at launch:
+// - stdIn if no filenames is specified,
+// - local file.
 package reader
 
 import (

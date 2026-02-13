@@ -1,4 +1,4 @@
-// Package processor operates with input - stdIn or file(s) - and sends result to output
+// Package processor operates with input task and sends result back to transport-layer
 package processor
 
 import (
@@ -19,23 +19,28 @@ func ProcessInput(ctx context.Context, task *model.SlaveTask) *model.SlaveResult
 	// считаем метчи или выводим метчи
 	switch task.GP.CountFound {
 	case true:
-		result.Output = countMatchingLines(task.Input, task.FileName, &task.GP)
+		result.Output = countMatchingLines(ctx, task.Input, task.FileName, &task.GP)
 	default:
-		result.Output = getMatchingLines(task.Input, task.FileName, &task.GP)
+		result.Output = getMatchingLines(ctx, task.Input, task.FileName, &task.GP)
 	}
 
 	// считаем общий хеш
-	result.HashSumm = hasher(result.Output)
+	result.HashSumm = hasher(ctx, result.Output)
 
 	return &result
 }
 
-func countMatchingLines(input []string, fileName string, gp *model.GrepParam) []string {
+func countMatchingLines(ctx context.Context, input []string, fileName string, gp *model.GrepParam) []string { // не нужно ли переделать чтобы возвращалась только строка, а не слайс?
 	res := ""
 	counter := 0
 	for _, v := range input {
-		if findMatch(gp, v) {
-			counter++
+		select {
+		case <-ctx.Done():
+			return nil
+		default:
+			if findMatch(gp, v) {
+				counter++
+			}
 		}
 	}
 
@@ -48,7 +53,8 @@ func countMatchingLines(input []string, fileName string, gp *model.GrepParam) []
 	return []string{res}
 }
 
-func getMatchingLines(input []string, fileName string, gp *model.GrepParam) []string {
+func getMatchingLines(ctx context.Context, input []string, fileName string, gp *model.GrepParam) []string {
+	var result []string
 	lineN := 1
 	beforeBuf := make([]string, 0, gp.CtxBefore)
 	isCtxZone := false
@@ -58,82 +64,87 @@ func getMatchingLines(input []string, fileName string, gp *model.GrepParam) []st
 	afterCount := 0
 
 	for _, line := range input {
-		isMatch = findMatch(gp, line)
-		if gp.InvertResult { //-v
-			isMatch = !isMatch
-		}
+		select {
+		case <-ctx.Done():
+			return nil
+		default: // всю дефолтную ветку можно вынести в отдельную функцию внутри этой функции для читабельности
+			isMatch = findMatch(gp, line)
+			if gp.InvertResult { //-v
+				isMatch = !isMatch
+			}
 
-		if isMatch {
-			if !isCtxZone {
-				// разбираемся с BEFORE и вставляем разделитель если надо
-				j := lineN - len(beforeBuf)
-				if j-lastPrintedN > 1 && lastPrintedN != 0 {
-					printLine(gp, "--", "", 0)
-				}
-				for i := range beforeBuf {
-					if _, ok := isPrinted[j]; !ok {
-						printLine(gp, beforeBuf[i], fileName, j)
-						isPrinted[j] = struct{}{}
-						lastPrintedN = j
+			if isMatch {
+				if !isCtxZone {
+					// разбираемся с BEFORE и вставляем разделитель если надо
+					j := lineN - len(beforeBuf)
+					if j-lastPrintedN > 1 && lastPrintedN != 0 {
+						result = append(result, normalizeLine(gp, "--", "", 0))
 					}
-					j++
+					for i := range beforeBuf {
+						if _, ok := isPrinted[j]; !ok {
+							result = append(result, normalizeLine(gp, beforeBuf[i], fileName, j))
+							isPrinted[j] = struct{}{}
+							lastPrintedN = j
+						}
+						j++
+					}
+				}
+
+				// обработка самой isMatch-строки
+				if _, ok := isPrinted[lineN]; !ok {
+					result = append(result, normalizeLine(gp, line, fileName, lineN))
+					lastPrintedN = lineN
+					isPrinted[lineN] = struct{}{}
+					if gp.CtxAfter > 0 {
+						isCtxZone = true
+					}
+					afterCount = gp.CtxAfter
+				}
+				lineN++
+				continue
+			}
+
+			// разбираемся с AFTER
+			if afterCount > 0 {
+				if _, ok := isPrinted[lineN]; !ok {
+					result = append(result, normalizeLine(gp, line, fileName, lineN))
+					lastPrintedN = lineN
+					isPrinted[lineN] = struct{}{}
+				}
+				afterCount--
+				if afterCount == 0 {
+					isCtxZone = false
 				}
 			}
 
-			// обработка самой isMatch-строки
-			if _, ok := isPrinted[lineN]; !ok {
-				printLine(gp, line, fileName, lineN)
-				lastPrintedN = lineN
-				isPrinted[lineN] = struct{}{}
-				if gp.CtxAfter > 0 {
-					isCtxZone = true
+			// актуализируем beforeBuf
+			if gp.CtxBefore > 0 {
+				if len(beforeBuf) == gp.CtxBefore {
+					beforeBuf = beforeBuf[1:] // pop front
 				}
-				afterCount = gp.CtxAfter
+				beforeBuf = append(beforeBuf, line)
 			}
+
 			lineN++
-			continue
 		}
-
-		// разбираемся с AFTER
-		if afterCount > 0 {
-			if _, ok := isPrinted[lineN]; !ok {
-				printLine(gp, line, fileName, lineN)
-				lastPrintedN = lineN
-				isPrinted[lineN] = struct{}{}
-			}
-			afterCount--
-			if afterCount == 0 {
-				isCtxZone = false
-			}
-		}
-
-		// актуализируем beforeBuf
-		if gp.CtxBefore > 0 {
-			if len(beforeBuf) == gp.CtxBefore {
-				beforeBuf = beforeBuf[1:] // pop front
-			}
-			beforeBuf = append(beforeBuf, line)
-		}
-
-		lineN++
 	}
 
-	return nil
+	return result
 }
 
-// учесть что нужно делать префикс имени файла если файлов >1  + нумерация строк
-func printLine(SP *model.GrepParam, line, fileName string, n int) {
+// учесть что нужно делать префикс имени файла + нумерация строк
+func normalizeLine(SP *model.GrepParam, line, fileName string, n int) string {
 	switch {
 	case fileName == "":
-		fmt.Println(line)
+		return line
 	case SP.PrintFileName && SP.EnumLine:
-		fmt.Printf("%s: %d: %s\n", fileName, n, line)
+		return fmt.Sprintf("%s: %d: %s", fileName, n, line)
 	case SP.EnumLine:
-		fmt.Printf("%d: %s\n", n, line)
+		return fmt.Sprintf("%d: %s", n, line)
 	case SP.PrintFileName:
-		fmt.Printf("%s: %s\n", fileName, line)
+		return fmt.Sprintf("%s: %s", fileName, line)
 	default:
-		fmt.Println(line)
+		return line
 	}
 }
 
@@ -151,10 +162,15 @@ func findMatch(SP *model.GrepParam, line string) bool {
 	}
 }
 
-func hasher(input []string) uint64 {
+func hasher(ctx context.Context, input []string) uint64 {
 	hs := xxhash.New()
 	for _, s := range input {
-		_, _ = hs.WriteString(s)
+		select {
+		case <-ctx.Done():
+			return 0
+		default:
+			_, _ = hs.WriteString(s)
+		}
 	}
 	return hs.Sum64()
 }

@@ -1,4 +1,4 @@
-// Package model contains data structure for storing initially provided flags and input-source values
+// Package model contains data structure for storing initially provided flags, input-source values and DTO
 package model
 
 import (
@@ -9,15 +9,14 @@ import (
 type AppMode string
 
 const (
-	ModeMaster           = AppMode("master")
-	ModeSlave            = AppMode("slave")
-	DefaultMasterAddress = "localhost:8080"
+	ModeMaster = AppMode("master")
+	ModeSlave  = AppMode("slave")
 )
 
 type AppInit struct {
 	Mode        AppMode
 	Address     string
-	Slaves      *NodesList
+	Slaves      NodesList
 	Quorum      int
 	SearchParam GrepParam
 }
@@ -57,7 +56,6 @@ type GrepParam struct {
 	PrintFileName bool     `json:"print_filename"`             // used to print filename prefix if there are >1 files to process
 }
 
-// ============ DTO ===========
 type MasterTask struct {
 	TaskID    string             `json:"tid" binding:"required"`
 	GP        GrepParam          `json:"grep_param" binding:"required"`
