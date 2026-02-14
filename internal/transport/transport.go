@@ -2,19 +2,31 @@
 package transport
 
 import (
+	"context"
 	"log"
 	"net/http"
 
 	"github.com/UnendingLoop/DistributedGrepClone/internal/model"
-	"github.com/UnendingLoop/DistributedGrepClone/internal/processor"
 	"github.com/gin-gonic/gin"
 	"github.com/wb-go/wbf/ginext"
 )
 
-func NewSlaveServer(addr string) *http.Server {
+type GrepHandler struct {
+	Proc TaskProcessor
+}
+
+type TaskProcessor interface {
+	ProcessInput(ctx context.Context, task *model.SlaveTask) *model.SlaveResult
+}
+
+func NewSlaveServer(addr string, p TaskProcessor) *http.Server {
+	h := GrepHandler{
+		Proc: p,
+	}
+
 	engine := ginext.New("release")
-	engine.GET("/ping", HealthCheck)
-	engine.POST("/task", ReceiveTask)
+	engine.GET("/ping", h.HealthCheck)
+	engine.POST("/task", h.ReceiveTask)
 
 	return &http.Server{
 		Addr:    addr,
@@ -22,23 +34,20 @@ func NewSlaveServer(addr string) *http.Server {
 	}
 }
 
-func HealthCheck(ctx *ginext.Context) {
+func (gh GrepHandler) HealthCheck(ctx *ginext.Context) {
 	log.Println("Received a healthcheck request!")
 	ctx.Status(200)
 }
 
-func ReceiveTask(ctx *ginext.Context) {
+func (gh GrepHandler) ReceiveTask(ctx *ginext.Context) {
 	var task model.SlaveTask
 
 	if err := ctx.ShouldBindJSON(&task); err != nil {
 		ctx.JSON(http.StatusBadRequest, gin.H{"failed to parse task from body: ": err.Error()})
+		return
 	}
 
-	log.Printf("Received task: %q", task.TaskID)
-	log.Printf("Input array is: %v", task.Input)
-
-	res := processor.ProcessInput(ctx.Request.Context(), &task)
-	log.Printf("Calculated result: %v", res)
+	res := gh.Proc.ProcessInput(ctx.Request.Context(), &task)
 
 	ctx.JSON(http.StatusOK, res)
 }

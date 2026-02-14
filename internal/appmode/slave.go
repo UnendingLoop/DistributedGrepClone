@@ -8,12 +8,14 @@ import (
 	"time"
 
 	"github.com/UnendingLoop/DistributedGrepClone/internal/model"
+	"github.com/UnendingLoop/DistributedGrepClone/internal/processor"
 	"github.com/UnendingLoop/DistributedGrepClone/internal/transport"
 )
 
 func RunSlave(ctx context.Context, stop context.CancelFunc, ai *model.AppInit) {
 	// получить экземпляр сервера
-	srv := transport.NewSlaveServer(ai.Address)
+	p := processor.Processor{}
+	srv := transport.NewSlaveServer(ai.Address, p)
 
 	// запуск сервера
 	go func() {

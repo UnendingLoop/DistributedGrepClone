@@ -16,7 +16,7 @@ var ctxPriority = map[string]int{}
 
 func InitAppMode(osArgs []string) (*model.AppInit, error) {
 	var appInit model.AppInit
-	flagParser := flag.NewFlagSet("DistributedGrepClone", flag.ExitOnError)
+	flagParser := flag.NewFlagSet("mygrep", flag.ExitOnError)
 	mode := flagParser.String("mode", "", "specify mode of the app: 'master' or 'slave'")
 	a := flagParser.Int("A", 0, "show N lines after target line")
 	b := flagParser.Int("B", 0, "show N lines before target line")
@@ -96,7 +96,7 @@ func initMasterParam(ai *model.AppInit, noNameArgs []string) error {
 	// Разбираемся с паттерном и входом
 	switch len(noNameArgs) {
 	case 0:
-		return errors.New("pattern not specified!\nUsage: DistributedGrepClone [flags] pattern [file(s)...]")
+		return errors.New("pattern not specified!\nUsage: mygrep [flags] pattern [file(s)...]")
 	case 1:
 		ai.SearchParam.Pattern = noNameArgs[0]
 	default:

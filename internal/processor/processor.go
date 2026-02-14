@@ -11,7 +11,9 @@ import (
 	"github.com/cespare/xxhash/v2"
 )
 
-func ProcessInput(ctx context.Context, task *model.SlaveTask) *model.SlaveResult {
+type Processor struct{}
+
+func (p Processor) ProcessInput(ctx context.Context, task *model.SlaveTask) *model.SlaveResult {
 	result := model.SlaveResult{
 		TaskID: task.TaskID,
 	}

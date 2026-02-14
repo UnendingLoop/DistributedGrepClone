@@ -16,7 +16,7 @@ func main() {
 	// инициализировать параметры запуска - режим и прочее:
 	appParam, err := parser.InitAppMode(os.Args[1:])
 	if err != nil {
-		log.Printf("Failed to launch DistributedGrepClone: %q", err.Error())
+		log.Printf("Failed to launch mygrep: %q", err.Error())
 		return
 	}
 
@@ -31,7 +31,7 @@ func main() {
 	case model.ModeSlave:
 		appmode.RunSlave(ctx, stop, appParam)
 	default:
-		log.Printf("Failed to launch: unknown mode %q specified.\nExiting the app...", appParam.Mode)
+		log.Printf("Failed to launch mygrep: unknown mode %q specified.\nExiting the app...", appParam.Mode)
 		return
 	}
 }

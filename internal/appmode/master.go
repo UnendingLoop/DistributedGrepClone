@@ -1,4 +1,4 @@
-// Package appmode provides 2 methods to work in preliminarily defined mode 'master' and 'slave'
+// Package appmode provides 2 methods to work in preliminarily defined modes 'master' and 'slave'
 package appmode
 
 import (
