@@ -7,9 +7,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"log"
 	"net/http"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -28,7 +28,7 @@ type taskTotals struct {
 func RunMaster(ctx context.Context, stop context.CancelFunc, ai *model.AppInit) {
 	defer stop()
 	// прочитать все инпут-строки
-	var tasks []model.MasterTask
+	var tasks []*model.MasterTask
 	var input []string
 	var err error
 
@@ -41,7 +41,7 @@ func RunMaster(ctx context.Context, stop context.CancelFunc, ai *model.AppInit) 
 			return
 		}
 		tCTX, cancel := context.WithCancel(ctx)
-		tasks = append(tasks, model.MasterTask{
+		tasks = append(tasks, &model.MasterTask{
 			TaskID:    uuid.Generate().String(),
 			GP:        ai.SearchParam,
 			Input:     input,
@@ -56,7 +56,7 @@ func RunMaster(ctx context.Context, stop context.CancelFunc, ai *model.AppInit) 
 		}
 
 		tCTX, cancel := context.WithCancel(ctx)
-		tasks = append(tasks, model.MasterTask{
+		tasks = append(tasks, &model.MasterTask{
 			TaskID:    uuid.Generate().String(),
 			GP:        ai.SearchParam,
 			Input:     input,
@@ -72,7 +72,7 @@ func RunMaster(ctx context.Context, stop context.CancelFunc, ai *model.AppInit) 
 			}
 
 			tCTX, cancel := context.WithTimeout(ctx, 1*time.Minute)
-			tasks = append(tasks, model.MasterTask{
+			tasks = append(tasks, &model.MasterTask{
 				TaskID:    uuid.Generate().String(),
 				GP:        ai.SearchParam,
 				Input:     input,
@@ -115,6 +115,9 @@ func checkSlavesHealth(ctx context.Context, slavesAddr []string, quorumN int) er
 	client := &http.Client{}
 
 	for _, v := range slavesAddr {
+		if !strings.Contains(v, "http://") {
+			v = "http://" + v
+		}
 		wg.Add(1)
 		go func(addr string) {
 			defer wg.Done()
@@ -144,33 +147,48 @@ func checkSlavesHealth(ctx context.Context, slavesAddr []string, quorumN int) er
 	return nil
 }
 
-func processTasks(ctx context.Context, nodes []string, tasks []model.MasterTask, quorumN int) ([][]string, error) {
-	resCollect := make(chan *model.SlaveResult)
+func processTasks(ctx context.Context, nodes []string, tasks []*model.MasterTask, quorumN int) ([][]string, error) {
+	resCollect := make(chan model.SlaveResult)
 	defer close(resCollect)
 
 	// итерируемся по заданиям(их может быть несколько, если на вход подано несколько файлов)
-	for _, task := range tasks {
-		// сразу маршалим задание на отправку
-		raw, err := json.Marshal(task)
-		if err != nil {
-			return nil, fmt.Errorf("failed to MARSHAL task: %q", err.Error())
-		}
-		body := bytes.NewReader(raw)
-
+	client := http.Client{}
+	for i := range tasks {
+		task := tasks[i]
 		// итерируемся по всем slave-node адресам и отправляем задания
 		for _, nodeAddr := range nodes {
-			go sendTaskToNode(task.CTX, nodeAddr, body, resCollect)
+			go sendTaskToNode(task.CTX, &client, nodeAddr, task, resCollect)
 		}
 	}
 
-	// запускаем сборщика результатов
+	// запускаем сборщика результатов c таймаутом в 1 минуту на сбор
 	ctx, cancel := context.WithTimeout(ctx, 1*time.Minute)
 	defer cancel()
 	return collectResults(ctx, resCollect, tasks, quorumN)
 }
 
-func sendTaskToNode(ctx context.Context, na string, body io.Reader, ch chan<- *model.SlaveResult) {
-	resp, err := http.NewRequestWithContext(ctx, "POST", na+"/task", body)
+func sendTaskToNode(ctx context.Context, client *http.Client, na string, task *model.MasterTask, ch chan<- model.SlaveResult) {
+	if !strings.Contains(na, "http://") {
+		na = "http://" + na
+	}
+
+	// сразу маршалим задание на отправку
+	raw, err := json.Marshal(task)
+	if err != nil {
+		log.Printf("failed to MARSHAL task: %q", err.Error())
+		return
+	}
+
+	body := bytes.NewReader(raw)
+
+	req, err := http.NewRequestWithContext(ctx, "POST", na+"/task", body)
+	if err != nil {
+		log.Printf("failed to GENERATE request to slave-node %q: %q", na, err.Error())
+		return
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := client.Do(req)
 	if err != nil {
 		log.Printf("failed to SEND task to slave-node %q: %q", na, err.Error())
 		return
@@ -183,16 +201,17 @@ func sendTaskToNode(ctx context.Context, na string, body io.Reader, ch chan<- *m
 		log.Printf("failed to UNMARSHAL result from slave-node %q: %q", na, err.Error())
 		return
 	}
-	ch <- &result
+
+	ch <- result
 }
 
-func collectResults(ctx context.Context, ch <-chan *model.SlaveResult, tasks []model.MasterTask, quorum int) ([][]string, error) {
+func collectResults(ctx context.Context, ch <-chan model.SlaveResult, tasks []*model.MasterTask, quorum int) ([][]string, error) {
 	quorumResults := make(map[string]*[]string, len(tasks))
 
 	// готовим мапу задач [TaskID]:*MasterTask чтобы по полученному результату быстро обновлять resMap
 	tasksMap := make(map[string]*model.MasterTask)
-	for _, v := range tasks {
-		tasksMap[v.TaskID] = &v
+	for i := range tasks {
+		tasksMap[tasks[i].TaskID] = tasks[i]
 	}
 
 	// создаем мапу мап для подсчета каждой вариации хеш-суммы по каждому заданию
@@ -205,28 +224,56 @@ func collectResults(ctx context.Context, ch <-chan *model.SlaveResult, tasks []m
 			select {
 			case <-ctx.Done():
 				return
-			case newRes := <-ch:
-				// кладем новый результат в resMap
-				if _, ok := resMap[newRes.TaskID]; !ok {
-					subMap := map[uint64]*taskTotals{newRes.HashSumm: {
+			case newRes, ok := <-ch:
+				if !ok {
+					return
+				}
+
+				// проверяем, существует ли задача с таким TaskID из полученного результата на стороне мастера
+				if _, taskExists := tasksMap[newRes.TaskID]; !taskExists {
+					continue
+				}
+
+				// создаем результат с полученным TaskID - если его еще нет
+				incremented := false
+				_, resExists := resMap[newRes.TaskID]
+				if !resExists {
+					newTT := &taskTotals{
 						task:  tasksMap[newRes.TaskID],
 						votes: 1,
 						data:  newRes.Output,
-					}}
-					resMap[newRes.TaskID] = subMap
-				} else {
-					submap := resMap[newRes.TaskID]
-					vote := submap[newRes.HashSumm]
-					vote.votes++
-					if vote.votes >= quorum { // если уже достигли кворума - отменяем контекст http-запросов по этой задаче
-						vote.task.CancelCTX()
-						quorumResults[vote.task.TaskID] = &vote.data
-						delete(resMap, newRes.TaskID) // удаляем ключ из мапы результатов, так как уже достигнут кворум
 					}
+					incremented = true
+					subMap := map[uint64]*taskTotals{newRes.HashSumm: newTT}
+					resMap[newRes.TaskID] = subMap
 				}
-				if len(quorumResults) == len(tasksMap) { // выход из горутины если по всем задачам уже есть кворум-результат
-					return
+
+				// создаем запись о полученном HashSumm - если такой еще нет
+				submap := resMap[newRes.TaskID]
+				_, hashExists := submap[newRes.HashSumm]
+				if !hashExists {
+					newTT := &taskTotals{
+						task:  tasksMap[newRes.TaskID],
+						votes: 1,
+						data:  newRes.Output,
+					}
+					incremented = true
+					submap[newRes.HashSumm] = newTT
 				}
+
+				// проверяем, не достигнут ли уже кворум по полученному HashSumm
+				hashRecord := submap[newRes.HashSumm]
+				if !incremented {
+					hashRecord.votes++
+				}
+				if hashRecord.votes >= quorum { // если уже достигли кворума - отменяем контекст http-запросов по этой задаче
+					hashRecord.task.CancelCTX()
+					quorumResults[hashRecord.task.TaskID] = &hashRecord.data
+					delete(resMap, newRes.TaskID) // удаляем ключ из мапы результатов, так как уже достигнут кворум
+				}
+			}
+			if len(quorumResults) == len(tasksMap) { // выход из горутины если по всем задачам уже есть кворум-результат
+				return
 			}
 		}
 	})
@@ -234,14 +281,17 @@ func collectResults(ctx context.Context, ch <-chan *model.SlaveResult, tasks []m
 	wg.Wait()
 
 	// проверяем не отменился ли контекст по длине результата
-	if len(quorumResults) == len(tasksMap) {
-		return nil, errors.New("failed to finish grepping: context cancelled")
+	if len(quorumResults) != len(tasksMap) {
+		return nil, errors.New("result collector's context cancelled")
 	}
 
 	// формируем результат
 	var resStrings [][]string
 	for _, v := range tasks {
-		resStrings = append(resStrings, *quorumResults[v.TaskID])
+		lines := quorumResults[v.TaskID]
+		if lines != nil {
+			resStrings = append(resStrings, *lines)
+		}
 	}
 
 	// возврат результата
