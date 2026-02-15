@@ -4,6 +4,7 @@ package processor
 import (
 	"context"
 	"fmt"
+	"log"
 	"regexp"
 	"strings"
 
@@ -21,7 +22,13 @@ func (p Processor) ProcessInput(ctx context.Context, task *model.SlaveTask) *mod
 	// считаем метчи или выводим метчи
 	switch task.GP.CountFound {
 	case true:
-		result.Output = countMatchingLines(ctx, task.Input, task.FileName, &task.GP)
+		res := countMatchingLines(ctx, task.Input, task.FileName, &task.GP)
+		if res == "" {
+			result.Output = []string{}
+		} else {
+			result.Output = []string{res}
+		}
+
 	default:
 		result.Output = getMatchingLines(ctx, task.Input, task.FileName, &task.GP)
 	}
@@ -32,15 +39,20 @@ func (p Processor) ProcessInput(ctx context.Context, task *model.SlaveTask) *mod
 	return &result
 }
 
-func countMatchingLines(ctx context.Context, input []string, fileName string, gp *model.GrepParam) []string { // не нужно ли переделать чтобы возвращалась только строка, а не слайс?
-	res := ""
+func countMatchingLines(ctx context.Context, input []string, fileName string, gp *model.GrepParam) string {
+	result := ""
 	counter := 0
 	for _, v := range input {
 		select {
 		case <-ctx.Done():
-			return nil
+			return ""
 		default:
-			if findMatch(gp, v) {
+			match, err := findMatch(gp, v)
+			if err != nil {
+				log.Printf("problem with pattern %q: %v", gp.Pattern, err)
+				return result
+			}
+			if match {
 				counter++
 			}
 		}
@@ -48,15 +60,15 @@ func countMatchingLines(ctx context.Context, input []string, fileName string, gp
 
 	switch {
 	case gp.PrintFileName:
-		res = fmt.Sprintf("%s: %d\n", fileName, counter)
+		result = fmt.Sprintf("%s:%d", fileName, counter)
 	default:
-		res = fmt.Sprintln(counter)
+		result = fmt.Sprintln(counter)
 	}
-	return []string{res}
+	return result
 }
 
 func getMatchingLines(ctx context.Context, input []string, fileName string, gp *model.GrepParam) []string {
-	var result []string
+	result := []string{}
 	lineN := 1
 	beforeBuf := make([]string, 0, gp.CtxBefore)
 	isCtxZone := false
@@ -65,12 +77,18 @@ func getMatchingLines(ctx context.Context, input []string, fileName string, gp *
 	isPrinted := make(map[int]struct{})
 	afterCount := 0
 
+	var err error
+
 	for _, line := range input {
 		select {
 		case <-ctx.Done():
-			return nil
+			return result
 		default: // всю дефолтную ветку можно вынести в отдельную функцию внутри этой функции для читабельности
-			isMatch = findMatch(gp, line)
+			isMatch, err = findMatch(gp, line)
+			if err != nil {
+				log.Printf("problem with pattern %q: %v", gp.Pattern, err)
+				return result
+			}
 			if gp.InvertResult { //-v
 				isMatch = !isMatch
 			}
@@ -137,30 +155,31 @@ func getMatchingLines(ctx context.Context, input []string, fileName string, gp *
 // учесть что нужно делать префикс имени файла + нумерация строк
 func normalizeLine(SP *model.GrepParam, line, fileName string, n int) string {
 	switch {
-	case fileName == "":
-		return line
 	case SP.PrintFileName && SP.EnumLine:
-		return fmt.Sprintf("%s: %d: %s", fileName, n, line)
+		return fmt.Sprintf("%s:%d:%s", fileName, n, line)
 	case SP.EnumLine:
-		return fmt.Sprintf("%d: %s", n, line)
+		return fmt.Sprintf("%d:%s", n, line)
 	case SP.PrintFileName:
-		return fmt.Sprintf("%s: %s", fileName, line)
+		return fmt.Sprintf("%s:%s", fileName, line)
 	default:
 		return line
 	}
 }
 
-func findMatch(SP *model.GrepParam, line string) bool {
+func findMatch(SP *model.GrepParam, line string) (bool, error) {
 	if SP.IgnoreCase { //-i
 		line = strings.ToLower(line)
 	}
 
 	switch {
 	case SP.ExactMatch: //-F
-		return strings.Contains(line, SP.Pattern)
+		return strings.Contains(line, SP.Pattern), nil
 	default:
-		pattern, _ := regexp.Compile(SP.Pattern)
-		return pattern.MatchString(line)
+		pattern, err := regexp.Compile(SP.Pattern)
+		if err != nil {
+			return false, err
+		}
+		return pattern.MatchString(line), nil
 	}
 }
 

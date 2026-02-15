@@ -6,21 +6,22 @@ package reader
 import (
 	"bufio"
 	"fmt"
+	"io"
 	"os"
 )
 
-func ReadInput(fileName string) ([]string, error) {
+func ReadInput(stdIn io.Reader, fileName string) ([]string, error) {
 	switch fileName {
 	case "":
-		return readStdIn()
+		return readStdIn(stdIn)
 	default:
 		return readFile(fileName)
 	}
 }
 
-func readStdIn() ([]string, error) {
+func readStdIn(stdIn io.Reader) ([]string, error) {
 	result := make([]string, 0)
-	scanner := bufio.NewScanner(os.Stdin)
+	scanner := bufio.NewScanner(stdIn)
 	for scanner.Scan() {
 		result = append(result, scanner.Text())
 	}
@@ -31,7 +32,7 @@ func readFile(fileName string) ([]string, error) {
 	// проверяем открывается ли файл
 	info, err := os.Stat(fileName)
 	if err != nil {
-		return nil, fmt.Errorf("error opening file %q: %q", fileName, err)
+		return nil, fmt.Errorf("error opening file %q: %v", fileName, err)
 	}
 	// проверяем не папка ли это
 	if info.IsDir() {
@@ -41,13 +42,13 @@ func readFile(fileName string) ([]string, error) {
 	// открываем файл для чтения
 	file, err := os.Open(fileName)
 	if err != nil {
-		return nil, fmt.Errorf("couldn't open file %q: %q", fileName, err)
+		return nil, fmt.Errorf("couldn't open file %q: %v", fileName, err)
 	}
 	defer file.Close()
 
 	// читаем и возвращаем результат
 	result := make([]string, 0)
-	scanner := bufio.NewScanner(os.Stdin)
+	scanner := bufio.NewScanner(file)
 	for scanner.Scan() {
 		result = append(result, scanner.Text())
 	}

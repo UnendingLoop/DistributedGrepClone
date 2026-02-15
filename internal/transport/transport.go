@@ -11,7 +11,7 @@ import (
 	"github.com/wb-go/wbf/ginext"
 )
 
-type GrepHandler struct {
+type grepHandler struct {
 	Proc TaskProcessor
 }
 
@@ -20,7 +20,7 @@ type TaskProcessor interface {
 }
 
 func NewSlaveServer(addr string, p TaskProcessor) *http.Server {
-	h := GrepHandler{
+	h := grepHandler{
 		Proc: p,
 	}
 
@@ -34,12 +34,12 @@ func NewSlaveServer(addr string, p TaskProcessor) *http.Server {
 	}
 }
 
-func (gh GrepHandler) HealthCheck(ctx *ginext.Context) {
+func (gh grepHandler) HealthCheck(ctx *ginext.Context) {
 	log.Println("Received a healthcheck request!")
 	ctx.Status(200)
 }
 
-func (gh GrepHandler) ReceiveTask(ctx *ginext.Context) {
+func (gh grepHandler) ReceiveTask(ctx *ginext.Context) {
 	var task model.SlaveTask
 
 	if err := ctx.ShouldBindJSON(&task); err != nil {

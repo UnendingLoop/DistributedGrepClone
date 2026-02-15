@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"os"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -35,7 +36,7 @@ func RunMaster(ctx context.Context, stop context.CancelFunc, ai *model.AppInit) 
 	// преобразовать вход в задания
 	switch len(ai.SearchParam.Source) {
 	case 0: // читаем вход из stdIn
-		input, err = reader.ReadInput("")
+		input, err = reader.ReadInput(os.Stdin, "")
 		if err != nil {
 			log.Printf("Something went wrong while reading StdIn: %q", err.Error())
 			return
@@ -49,7 +50,7 @@ func RunMaster(ctx context.Context, stop context.CancelFunc, ai *model.AppInit) 
 			CancelCTX: cancel,
 		})
 	case 1: // читаем из единственного файла
-		input, err = reader.ReadInput(ai.SearchParam.Source[0])
+		input, err = reader.ReadInput(os.Stdin, ai.SearchParam.Source[0])
 		if err != nil {
 			log.Printf("Something went wrong while reading file %q: %q", ai.SearchParam.Source[0], err.Error())
 			return
@@ -65,7 +66,7 @@ func RunMaster(ctx context.Context, stop context.CancelFunc, ai *model.AppInit) 
 		})
 	default: // итерируемся по списку файлов
 		for _, fname := range ai.SearchParam.Source {
-			input, err = reader.ReadInput(fname)
+			input, err = reader.ReadInput(os.Stdin, fname)
 			if err != nil {
 				log.Printf("Something went wrong while reading file %q: %q", fname, err.Error())
 				return
