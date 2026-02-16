@@ -57,12 +57,15 @@ type GrepParam struct {
 }
 
 type MasterTask struct {
-	TaskID    string             `json:"tid" binding:"required"`
-	GP        GrepParam          `json:"grep_param" binding:"required"`
-	Input     []string           `json:"input" binding:"required"`
-	FileName  string             `json:"file_name,omitempty"`
-	CTX       context.Context    `json:"-"`
-	CancelCTX context.CancelFunc `json:"-"`
+	Task      TaskDTO
+	CTX       context.Context
+	CancelCTX context.CancelFunc
+}
+type TaskDTO struct {
+	TaskID   string    `json:"tid" binding:"required"`
+	GP       GrepParam `json:"grep_param" binding:"required"`
+	Input    []string  `json:"input" binding:"required"`
+	FileName string    `json:"file_name,omitempty"`
 }
 
 type SlaveTask struct {

@@ -37,7 +37,7 @@ func TestReceiveTask(t *testing.T) {
 	cases := []struct {
 		name       string
 		mockProcFn *mockProcessor
-		ttask      *model.MasterTask
+		ttask      *model.TaskDTO
 		wantCode   int
 	}{
 		{
@@ -47,7 +47,7 @@ func TestReceiveTask(t *testing.T) {
 					return &model.SlaveResult{}
 				},
 			},
-			ttask: &model.MasterTask{
+			ttask: &model.TaskDTO{
 				TaskID: "taskID",
 				GP: model.GrepParam{
 					Pattern: "pattern",
