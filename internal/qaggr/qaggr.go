@@ -27,21 +27,22 @@ func CollectAggregateResults(ctx context.Context, ch <-chan model.SlaveResult, t
 	// создаем мапу мап для подсчета каждой вариации хеш-суммы по каждому заданию
 	resMap := make(map[string]map[uint64]*taskTotals)
 
+	// закладываем очистку используемых мап при выходе
+	defer func() {
+		for k := range resMap {
+			delete(resMap, k)
+		}
+		for k := range tasksMap {
+			delete(tasksMap, k)
+		}
+		for k := range quorumResults {
+			delete(quorumResults, k)
+		}
+	}()
+
 	// запуск горутины-сборщика
 	wg := sync.WaitGroup{}
 	wg.Go(func() {
-		defer func() { // закладываем очистку используемых мап при выходе из горутины
-			for k := range resMap {
-				delete(resMap, k)
-			}
-			for k := range tasksMap {
-				delete(tasksMap, k)
-			}
-			for k := range quorumResults {
-				delete(quorumResults, k)
-			}
-		}()
-
 		for {
 			select {
 			case <-ctx.Done():
@@ -89,7 +90,9 @@ func CollectAggregateResults(ctx context.Context, ch <-chan model.SlaveResult, t
 					hashRecord.votes++
 				}
 				if hashRecord.votes >= quorum { // если уже достигли кворума - отменяем контекст http-запросов по этой задаче
-					hashRecord.task.CancelCTX()
+					if hashRecord.task.CancelCTX != nil {
+						hashRecord.task.CancelCTX()
+					}
 					quorumResults[hashRecord.task.Task.TaskID] = &hashRecord.data
 					delete(resMap, newRes.TaskID) // удаляем ключ из мапы результатов, так как уже достигнут кворум
 				}
@@ -104,15 +107,20 @@ func CollectAggregateResults(ctx context.Context, ch <-chan model.SlaveResult, t
 
 	// проверяем не отменился ли контекст по длине результата
 	if len(quorumResults) != len(tasksMap) {
-		return nil, errors.New("result collector's context cancelled")
+		return nil, errors.New("CollectAggregateResults's context timeout exceeded or cancelled without reaching quorum")
 	}
 
 	// формируем результат
 	var resStrings [][]string
 	for _, v := range tasks {
-		lines := quorumResults[v.Task.TaskID]
-		if lines != nil {
-			resStrings = append(resStrings, *lines)
+		select {
+		case <-ctx.Done():
+			return nil, errors.New("CollectAggregateResults's context cancelled on the stage of forming a final result")
+		default:
+			lines := quorumResults[v.Task.TaskID]
+			if lines != nil {
+				resStrings = append(resStrings, *lines)
+			}
 		}
 	}
 
