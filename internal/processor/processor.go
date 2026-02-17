@@ -62,7 +62,7 @@ func countMatchingLines(ctx context.Context, input []string, fileName string, gp
 	case gp.PrintFileName:
 		result = fmt.Sprintf("%s:%d", fileName, counter)
 	default:
-		result = fmt.Sprintln(counter)
+		result = fmt.Sprint(counter)
 	}
 	return result
 }
@@ -77,9 +77,9 @@ func getMatchingLines(ctx context.Context, input []string, fileName string, gp *
 	isPrinted := make(map[int]struct{})
 	afterCount := 0
 
-	withCTX := true
-	if gp.CtxAfter == 0 && gp.CtxBefore == 0 {
-		withCTX = false
+	var withCTX bool
+	if gp.CtxAfter != 0 || gp.CtxBefore != 0 {
+		withCTX = true
 	}
 
 	var err error
@@ -93,9 +93,6 @@ func getMatchingLines(ctx context.Context, input []string, fileName string, gp *
 			if err != nil {
 				log.Printf("problem with pattern %q: %v", gp.Pattern, err)
 				return result
-			}
-			if gp.InvertResult { //-v
-				isMatch = !isMatch
 			}
 
 			switch withCTX {
@@ -178,21 +175,29 @@ func normalizeLine(SP *model.GrepParam, line, fileName string, n int) string {
 	}
 }
 
-func findMatch(SP *model.GrepParam, line string) (bool, error) {
-	if SP.IgnoreCase { //-i
+func findMatch(gp *model.GrepParam, line string) (bool, error) {
+	if gp.IgnoreCase { //-i
 		line = strings.ToLower(line)
 	}
 
+	var res bool
+
 	switch {
-	case SP.ExactMatch: //-F
-		return strings.Contains(line, SP.Pattern), nil
+	case gp.ExactMatch: //-F
+		res = strings.Contains(line, gp.Pattern)
 	default:
-		pattern, err := regexp.Compile(SP.Pattern)
+		pattern, err := regexp.Compile(gp.Pattern)
 		if err != nil {
 			return false, err
 		}
-		return pattern.MatchString(line), nil
+		res = pattern.MatchString(line)
 	}
+
+	if gp.InvertResult { //-v - инвертирвоание результата
+		res = !res
+	}
+
+	return res, nil
 }
 
 func hasher(ctx context.Context, input []string) uint64 {
