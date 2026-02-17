@@ -124,9 +124,10 @@ func readInputConvertToTasks(ctx context.Context, src []string, gp model.GrepPar
 		tCTX, cancel := context.WithCancel(ctx)
 		tasks = append(tasks, &model.MasterTask{
 			Task: model.TaskDTO{
-				TaskID: uuid.Generate().String(),
-				GP:     gp,
-				Input:  input,
+				TaskID:   uuid.Generate().String(),
+				GP:       gp,
+				Input:    input,
+				FileName: src[0],
 			},
 			CTX:       tCTX,
 			CancelCTX: cancel,
@@ -159,7 +160,9 @@ func processTasks(ctx context.Context, nodes []string, tasks []*model.MasterTask
 	resCollect := make(chan model.SlaveResult)
 
 	// итерируемся по заданиям(их может быть несколько, если на вход подано несколько файлов)
-	client := http.Client{}
+	client := http.Client{
+		Timeout: 5 * time.Second,
+	}
 	wg := sync.WaitGroup{}
 	for i := range tasks {
 		task := tasks[i]
@@ -170,7 +173,8 @@ func processTasks(ctx context.Context, nodes []string, tasks []*model.MasterTask
 		}
 	}
 
-	defer func() {
+	// в отдельной горутине отслеживаем завершение работы пишущих в канал горутин sendTaskToNode()
+	go func() {
 		wg.Wait()
 		close(resCollect)
 	}()
@@ -197,7 +201,7 @@ func sendTaskToNode(ctx context.Context, wg *sync.WaitGroup, client *http.Client
 
 	body := bytes.NewReader(raw)
 
-	req, err := http.NewRequestWithContext(ctx, "POST", na+"/task", body)
+	req, err := http.NewRequestWithContext(task.CTX, "POST", na+"/task", body)
 	if err != nil {
 		log.Printf("failed to GENERATE request to slave-node %q: %q", na, err.Error())
 		return
@@ -206,7 +210,7 @@ func sendTaskToNode(ctx context.Context, wg *sync.WaitGroup, client *http.Client
 
 	resp, err := client.Do(req)
 	if err != nil {
-		log.Printf("failed to SEND task to slave-node %q: %q", na, err.Error())
+		log.Printf("failed to SEND task to slave-node: %q", err.Error())
 		return
 	}
 
@@ -218,5 +222,9 @@ func sendTaskToNode(ctx context.Context, wg *sync.WaitGroup, client *http.Client
 		return
 	}
 
-	ch <- result
+	select {
+	case ch <- result:
+	case <-ctx.Done():
+		return
+	}
 }

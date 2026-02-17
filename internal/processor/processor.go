@@ -77,12 +77,17 @@ func getMatchingLines(ctx context.Context, input []string, fileName string, gp *
 	isPrinted := make(map[int]struct{})
 	afterCount := 0
 
+	withCTX := true
+	if gp.CtxAfter == 0 && gp.CtxBefore == 0 {
+		withCTX = false
+	}
+
 	var err error
 
 	for _, line := range input {
 		select {
 		case <-ctx.Done():
-			return result
+			return []string{}
 		default: // всю дефолтную ветку можно вынести в отдельную функцию внутри этой функции для читабельности
 			isMatch, err = findMatch(gp, line)
 			if err != nil {
@@ -93,56 +98,63 @@ func getMatchingLines(ctx context.Context, input []string, fileName string, gp *
 				isMatch = !isMatch
 			}
 
-			if isMatch {
-				if !isCtxZone {
-					// разбираемся с BEFORE и вставляем разделитель если надо
-					j := lineN - len(beforeBuf)
-					if j-lastPrintedN > 1 && lastPrintedN != 0 {
-						result = append(result, normalizeLine(gp, "--", "", 0))
-					}
-					for i := range beforeBuf {
-						if _, ok := isPrinted[j]; !ok {
-							result = append(result, normalizeLine(gp, beforeBuf[i], fileName, j))
-							isPrinted[j] = struct{}{}
-							lastPrintedN = j
+			switch withCTX {
+			case true:
+				if isMatch {
+					if !isCtxZone {
+						// разбираемся с BEFORE и вставляем разделитель если надо
+						j := lineN - len(beforeBuf)
+						if j-lastPrintedN > 1 && lastPrintedN != 0 {
+							result = append(result, "--")
 						}
-						j++
+						for i := range beforeBuf {
+							if _, ok := isPrinted[j]; !ok {
+								result = append(result, normalizeLine(gp, beforeBuf[i], fileName, j))
+								isPrinted[j] = struct{}{}
+								lastPrintedN = j
+							}
+							j++
+						}
+					}
+
+					// обработка самой isMatch-строки
+					if _, ok := isPrinted[lineN]; !ok {
+						result = append(result, normalizeLine(gp, line, fileName, lineN))
+						lastPrintedN = lineN
+						isPrinted[lineN] = struct{}{}
+						if gp.CtxAfter > 0 {
+							isCtxZone = true
+						}
+						afterCount = gp.CtxAfter
+					}
+					lineN++
+					continue
+				}
+
+				// разбираемся с AFTER
+				if afterCount > 0 {
+					if _, ok := isPrinted[lineN]; !ok {
+						result = append(result, normalizeLine(gp, line, fileName, lineN))
+						lastPrintedN = lineN
+						isPrinted[lineN] = struct{}{}
+					}
+					afterCount--
+					if afterCount == 0 {
+						isCtxZone = false
 					}
 				}
 
-				// обработка самой isMatch-строки
-				if _, ok := isPrinted[lineN]; !ok {
-					result = append(result, normalizeLine(gp, line, fileName, lineN))
-					lastPrintedN = lineN
-					isPrinted[lineN] = struct{}{}
-					if gp.CtxAfter > 0 {
-						isCtxZone = true
+				// актуализируем beforeBuf
+				if gp.CtxBefore > 0 {
+					if len(beforeBuf) == gp.CtxBefore {
+						beforeBuf = beforeBuf[1:] // pop front
 					}
-					afterCount = gp.CtxAfter
+					beforeBuf = append(beforeBuf, line)
 				}
-				lineN++
-				continue
-			}
-
-			// разбираемся с AFTER
-			if afterCount > 0 {
-				if _, ok := isPrinted[lineN]; !ok {
+			default:
+				if isMatch {
 					result = append(result, normalizeLine(gp, line, fileName, lineN))
-					lastPrintedN = lineN
-					isPrinted[lineN] = struct{}{}
 				}
-				afterCount--
-				if afterCount == 0 {
-					isCtxZone = false
-				}
-			}
-
-			// актуализируем beforeBuf
-			if gp.CtxBefore > 0 {
-				if len(beforeBuf) == gp.CtxBefore {
-					beforeBuf = beforeBuf[1:] // pop front
-				}
-				beforeBuf = append(beforeBuf, line)
 			}
 
 			lineN++

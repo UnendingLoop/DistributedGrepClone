@@ -40,6 +40,7 @@ func (gh grepHandler) HealthCheck(ctx *ginext.Context) {
 }
 
 func (gh grepHandler) ReceiveTask(ctx *ginext.Context) {
+	log.Println("Received a task!")
 	var task model.SlaveTask
 
 	if err := ctx.ShouldBindJSON(&task); err != nil {

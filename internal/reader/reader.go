@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strings"
 )
 
 func ReadInput(stdIn io.Reader, fileName string) ([]string, error) {
@@ -23,7 +24,11 @@ func readStdIn(stdIn io.Reader) ([]string, error) {
 	result := make([]string, 0)
 	scanner := bufio.NewScanner(stdIn)
 	for scanner.Scan() {
-		result = append(result, scanner.Text())
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" || line == "\x1A" {
+			continue // пропускаем пустые строки
+		}
+		result = append(result, line)
 	}
 	return result, scanner.Err()
 }

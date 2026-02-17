@@ -4,7 +4,9 @@ package qaggr
 import (
 	"context"
 	"errors"
+	"log"
 	"sync"
+	"time"
 
 	"github.com/UnendingLoop/DistributedGrepClone/internal/model"
 )
@@ -89,35 +91,36 @@ func CollectAggregateResults(ctx context.Context, ch <-chan model.SlaveResult, t
 				if !incremented {
 					hashRecord.votes++
 				}
-				if hashRecord.votes >= quorum { // если уже достигли кворума - отменяем контекст http-запросов по этой задаче
+				if hashRecord.votes >= quorum { // если уже достигли кворума - отменяем контекст по этой задаче
 					if hashRecord.task.CancelCTX != nil {
 						hashRecord.task.CancelCTX()
 					}
 					quorumResults[hashRecord.task.Task.TaskID] = &hashRecord.data
 					delete(resMap, newRes.TaskID) // удаляем ключ из мапы результатов, так как уже достигнут кворум
 				}
-			}
-			if len(quorumResults) == len(tasksMap) { // выход из горутины если по всем задачам уже есть кворум-результат
-				return
+			default:
+				if len(quorumResults) == len(tasksMap) { // выход из горутины, если по завершении принятия результатов канал не закрылся
+					return
+				}
+				time.Sleep(200 * time.Millisecond)
 			}
 		}
 	})
 
 	wg.Wait()
 
-	// проверяем не отменился ли контекст по длине результата
-	if len(quorumResults) != len(tasksMap) {
-		return nil, errors.New("CollectAggregateResults's context timeout exceeded or cancelled without reaching quorum")
-	}
-
-	// формируем результат
+	// формируем результат - в него попадут только задачи, достигшие кворума по результатам
 	var resStrings [][]string
 	for _, v := range tasks {
 		select {
 		case <-ctx.Done():
 			return nil, errors.New("CollectAggregateResults's context cancelled on the stage of forming a final result")
 		default:
-			lines := quorumResults[v.Task.TaskID]
+			lines, ok := quorumResults[v.Task.TaskID]
+			if !ok {
+				log.Printf("Quorum failed for file %q", v.Task.FileName)
+				continue
+			}
 			if lines != nil {
 				resStrings = append(resStrings, *lines)
 			}
