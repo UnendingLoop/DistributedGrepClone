@@ -61,27 +61,32 @@ func checkSlavesHealth(ctx context.Context, slavesAddr []string, quorumN int) er
 	client := &http.Client{}
 
 	for _, v := range slavesAddr {
-		if !strings.Contains(v, "http://") {
-			v = "http://" + v
+		select {
+		case <-ctx.Done():
+			return nil
+		default:
+			if !strings.Contains(v, "http://") {
+				v = "http://" + v
+			}
+			wg.Add(1)
+			go func(addr string) {
+				defer wg.Done()
+				req, err := http.NewRequestWithContext(rCtx, "GET", addr+"/ping", nil)
+				if err != nil {
+					return
+				}
+
+				resp, err := client.Do(req)
+				if err != nil {
+					return
+				}
+				defer resp.Body.Close()
+
+				if resp.StatusCode == http.StatusOK {
+					goodSlaves.Add(1)
+				}
+			}(v)
 		}
-		wg.Add(1)
-		go func(addr string) {
-			defer wg.Done()
-			req, err := http.NewRequestWithContext(rCtx, "GET", addr+"/ping", nil)
-			if err != nil {
-				return
-			}
-
-			resp, err := client.Do(req)
-			if err != nil {
-				return
-			}
-			defer resp.Body.Close()
-
-			if resp.StatusCode == http.StatusOK {
-				goodSlaves.Add(1)
-			}
-		}(v)
 	}
 
 	wg.Wait()
