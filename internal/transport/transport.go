@@ -3,7 +3,6 @@ package transport
 
 import (
 	"context"
-	"log"
 	"net/http"
 
 	"github.com/UnendingLoop/DistributedGrepClone/internal/model"
@@ -29,18 +28,16 @@ func NewSlaveServer(addr string, p TaskProcessor) *http.Server {
 	engine.POST("/task", h.ReceiveTask)
 
 	return &http.Server{
-		Addr:    addr,
+		Addr:    ":" + addr,
 		Handler: engine,
 	}
 }
 
 func (gh grepHandler) HealthCheck(ctx *ginext.Context) {
-	log.Println("Received a healthcheck request!")
 	ctx.Status(200)
 }
 
 func (gh grepHandler) ReceiveTask(ctx *ginext.Context) {
-	log.Println("Received a task!")
 	var task model.SlaveTask
 
 	if err := ctx.ShouldBindJSON(&task); err != nil {
