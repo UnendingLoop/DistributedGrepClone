@@ -84,7 +84,7 @@ func checkSlavesHealth(ctx context.Context, slavesAddr []string, quorumN int) er
 
 				if resp.StatusCode == http.StatusOK {
 					goodSlaves.Add(1)
-				}
+				} // можно добавить исключение ноды из общего списка slave-нод
 			}(v)
 		}
 	}

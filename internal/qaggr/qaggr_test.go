@@ -26,7 +26,7 @@ func TestCollectAggregateResults(t *testing.T) {
 		wantRes   [][]string
 	}{
 		{
-			name: "Negative - cancelled ctx v1",
+			name: "Negative - cancelled ctx",
 			testCtx: func() struct {
 				ctx    context.Context
 				cancel context.CancelFunc
@@ -43,7 +43,7 @@ func TestCollectAggregateResults(t *testing.T) {
 			testCh:    make(chan model.SlaveResult),
 			testTasks: []*model.MasterTask{{Task: model.TaskDTO{TaskID: "task1"}}, {Task: model.TaskDTO{TaskID: "task2"}}},
 			testQ:     1,
-			wantErr:   "exceeded or cancelled without reaching quorum",
+			wantErr:   "context cancelled on the stage of forming",
 			wantRes:   nil,
 		},
 		{

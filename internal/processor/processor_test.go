@@ -31,8 +31,8 @@ func TestProcessInput(t *testing.T) {
 			},
 			wantRes: &model.SlaveResult{
 				TaskID:   "testTask",
-				Output:   []string{"3\n"},
-				HashSumm: hasher(t, []string{"3\n"}),
+				Output:   []string{"3"},
+				HashSumm: hasher(t, []string{"3"}),
 			},
 			ctx: context.Background(),
 		},
@@ -49,8 +49,8 @@ func TestProcessInput(t *testing.T) {
 			},
 			wantRes: &model.SlaveResult{
 				TaskID:   "testTask",
-				Output:   []string{"3\n"},
-				HashSumm: hasher(t, []string{"3\n"}),
+				Output:   []string{"3"},
+				HashSumm: hasher(t, []string{"3"}),
 			},
 			ctx: context.Background(),
 		},
